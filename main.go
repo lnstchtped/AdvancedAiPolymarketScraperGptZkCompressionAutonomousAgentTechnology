@@ -5,6 +5,7 @@ import (
 	"fmt"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -15,11 +16,19 @@ import (
 
 const ticker = "who-will-hbo-doc-identify-as-satoshi"
 
+var buildID = ""
+
 func main() {
-	if err := ui.Init(); err != nil {
+	err := ui.Init()
+	if err != nil {
 		log.Fatalf("failed to initialize termui: %v", err)
 	}
 	defer ui.Close()
+
+	buildID, err = getBuildID()
+	if err != nil {
+		log.Fatalf("failed to get build id: %v", err)
+	}
 
 	table := widgets.NewTable()
 	table.Title = "Who is Satoshi?"
@@ -72,6 +81,32 @@ func main() {
 	}
 }
 
+func getBuildID() (string, error) {
+	resp, err := http.Get("https://polymarket.com/markets/crypto")
+	if err != nil {
+		return "", fmt.Errorf("failed to get url: %w", err)
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if !strings.Contains(string(body), `"buildId":"`) {
+		return "", fmt.Errorf("build id not found")
+	}
+
+	buildID = strings.Split(strings.Split(string(body), `"buildId":"`)[1], `"`)[0]
+
+	return buildID, nil
+}
+
 type response struct {
 	PageProps struct {
 		DehydratedState struct {
@@ -96,14 +131,22 @@ type price struct {
 }
 
 func fetch() ([]price, error) {
-	resp, err := http.Get("https://polymarket.com/_next/data/vUQsweOjRc2jlCeUOtgFT/en/markets/crypto.json?slug=crypto")
+	resp, err := http.Get(fmt.Sprintf("https://polymarket.com/_next/data/%s/en/markets/crypto.json?slug=crypto", buildID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get url: %w", err)
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		buildID, err = getBuildID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get build id: %w", err)
+		}
+		return fetch()
+	default:
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
